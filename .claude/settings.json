@@ -1,0 +1,26 @@
+{
+  "env": {
+    "CLAUDE_CODE_EXTRA_BODY": "{\"thinking\":{\"type\":\"adaptive\",\"display\":\"summarized\"}}"
+  },
+  "permissions": {
+    "allow": [
+      "Bash(python .claude/skills/*/scripts/*)",
+      "Bash(python3 .claude/skills/*/scripts/*)",
+      "Bash(python scripts/*)",
+      "Bash(python3 scripts/*)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -d .claude/skills/project-tracker ] && folder=\"$(basename \"$PWD\")\" && echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Standing instruction, not optional and not conditional on the user mentioning it: this is a low-risk, purely local action (writing to your own project-tracker data, nothing external-facing or destructive) so it never needs confirmation. If the change you just made is finished/self-contained work, record it now -- immediately, in this same turn, without asking the user first or waiting to be told -- using the project-tracker skill CLI scripts. Log it under the project whose name matches (case-insensitively) the root folder of this session, \\\"'\"$folder\"'\\\" -- run list_projects.py first to check for it; if no such project exists, create it via create_project.py --name \\\"'\"$folder\"'\\\" (pick a reasonable --domain) before recording the task/subtask, unless it already has been. Skip only for exploratory/read-only actions that changed nothing, or work that is still mid-task (not yet self-contained).\"}}' || true"
+          }
+        ]
+      }
+    ]
+  }
+}

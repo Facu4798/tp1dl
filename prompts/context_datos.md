@@ -1,0 +1,5 @@
+## Context — fuentes de datos (verificadas en el Hub / GitHub)
+
+- **ESC-50**: GitHub `karolpiczak/ESC-50` (zip del repo: `https://github.com/karolpiczak/ESC-50/archive/master.zip`, ~600 MB). 2000 clips WAV de 5 s a 44.1 kHz, 50 clases, 40 por clase, 5 folds predefinidos; metadata en `meta/esc50.csv` (columnas filename, fold, target, category, ...).
+- **CoNLL-2003**: `eriktks/conll2003` contiene solo un script de carga (`conll2003.py`), que `datasets` ≥ 4 ya no ejecuta. Cargar la conversión oficial a parquet: `load_dataset("eriktks/conll2003", revision="refs/convert/parquet")` (splits train / validation / test). Etiquetas NER estándar: `O, B-PER, I-PER, B-ORG, I-ORG, B-LOC, I-LOC, B-MISC, I-MISC` (tomar los nombres de `features['ner_tags'].feature.names` si están disponibles; si no, usar esta lista como fallback).
+- **EuroSAT**: `timm/eurosat-rgb` (parquet). Features: `image`, `label` (ClassLabel de 10 clases: AnnualCrop, Forest, HerbaceousVegetation, Highway, Industrial, Pasture, PermanentCrop, Residential, River, SeaLake), `image_id`. Splits: train 16200 / validation 5400 / test 5400. Imágenes RGB de 64×64.

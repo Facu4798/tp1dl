@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"import pypdf; print\\('ok'\\)\")",
+      "Bash(python -c ' *)",
+      "Bash(PYTHONIOENCODING=utf-8 python -c ' *)",
+      "Bash(python -c \"import pdfplumber; print\\('ok'\\)\")",
+      "Bash(PYTHONIOENCODING=utf-8 python \"paper\\\\pdf_to_markdown.py\" \"Simple Open-Vocabulary  Object Detection with Vision Transformers - 2022.pdf\" \"paper\")",
+      "Bash(tar -xzf arXiv-2205.06230v2.tar.gz -C paper/source)",
+      "Bash(pandoc --version)",
+      "Bash(python -c \"import pypdfium2; print\\('pypdfium2 ok'\\)\")",
+      "Bash(python -c \"import fitz; print\\('pymupdf ok'\\)\")",
+      "Bash(PYTHONIOENCODING=utf-8 python latex_to_markdown.py)",
+      "Bash(grep -n \"tab:\\\\|fig:\\\\|sec:\\\\|{ #\\\\|\\\\\\\\\\\\\\\\\" _draft.md)",
+      "Bash(grep -no \"[A-Za-z]*~\\\\?\\\\\\\\\\\\\\\\ref{[^}]*}\\\\|[A-Za-z]*~\\\\?\\\\\\\\\\\\\\\\Cref{[^}]*}\\\\|[A-Za-z]*~\\\\?\\\\\\\\\\\\\\\\cref{[^}]*}\" main.tex appendix.tex table_*.tex)",
+      "Bash(grep -no \".\\\\{0,15\\\\}\\\\\\\\\\\\\\\\ref{[^}]*}\" main.tex appendix.tex)",
+      "Bash(grep -no \"Table.\\\\{0,20\\\\}\\\\\\\\\\\\\\\\ref{[^}]*}\\\\|Section.\\\\{0,20\\\\}\\\\\\\\\\\\\\\\ref{[^}]*}\\\\|Table.\\\\{0,20\\\\}\\\\\\\\\\\\\\\\Cref{[^}]*}\" main.tex appendix.tex)",
+      "Bash(grep -n \"\\\\\\\\\\\\\\\\begin\\\\|\\\\\\\\\\\\\\\\end{table\\\\|tab:\\\\|fig:\\\\|sec:\\\\|Table Table\\\\|Figure Figure\" _draft.md)",
+      "Bash(grep -n \"\\\\\\\\\\\\\\\\[a-zA-Z]\" _draft.md)",
+      "Bash(PYTHONIOENCODING=utf-8 python convert_figures.py)",
+      "Bash(grep -n \"@@TABLE\\\\|\\\\\\\\\\\\\\\\begin\\\\|\\\\\\\\\\\\\\\\end{table\\\\|\\\\\\\\\\\\\\\\cite\\\\|\\\\\\\\\\\\\\\\ref\\\\|\\\\\\\\\\\\\\\\Cref\" paper.md)"
+    ]
+  }
+}
