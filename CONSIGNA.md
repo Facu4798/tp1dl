@@ -70,7 +70,8 @@ UCI-HAR, FordA), usarlos completos; si son grandes, tomar un subconjunto fijo de
 ejemplos en clasificación de texto (AG News, SNLI), 3k diálogos en resumen (DialogSum, SAMSum) y 
 10k imágenes en el Ejercicio 3 con full fine-tuning de ViT/Swin/DeiT (EuroSAT). 
 
-## Transformer del Ejercicio 1. El encoder Transformer debe implementarse desde cero en PyTorch (No debe 
+## Transformer del Ejercicio 1.
+El encoder Transformer debe implementarse desde cero en PyTorch (No debe 
 usarse torch.nn.Transformer (ni torch.nn.TransformerEncoder, torch.nn.TransformerEncoderLayer o 
 torch.nn.MultiheadAttention)): la atención escalada, las cabezas múltiples, el feed-forward y la normalización 
 se programan explícitamente. Pueden partir de los notebooks de implementación del Transformer desde cero 

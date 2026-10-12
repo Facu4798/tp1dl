@@ -16,8 +16,12 @@ def md(src):
     cells.append(new_markdown_cell(src.strip("\n")))
 
 
-def code(src):
-    cells.append(new_code_cell(src.strip("\n")))
+def code(src, form=False):
+    # form=True: en Colab se muestra solo el resultado (texto renderizado), con el código plegado
+    cell = new_code_cell(src.strip("\n"))
+    if form:
+        cell.metadata["cellView"] = "form"
+    cells.append(cell)
 
 
 # ---------------------------------------------------------------- 0. Título
@@ -58,9 +62,9 @@ md(r"""
 md(r"""
 ## 1. Configuración
 
-- Detectamos si corremos en **Colab**: solo ahí se instalan dependencias y se monta Google Drive; fuera de Colab se usa una carpeta local (`TP1_LOCAL_DIR`).
+- Detectamos si corremos en **Colab**: solo ahí se instalan dependencias; fuera de Colab se usa la carpeta local `./tp1_local/ej1`.
 - `SMOKE_TEST` (por defecto `False`) achica datos y épocas para verificar que el notebook corre de punta a punta en CPU. Se activa con la variable de entorno `TP1_SMOKE_TEST=1`, sin editar el notebook.
-- Checkpoints y caches van a `MyDrive/Colab_Notebooks/TP1_Adell_Giannice_Mazzola/ej1/` para poder reanudar si la sesión se corta. Los WAV se descomprimen en el disco local de Colab (más rápido que Drive).
+- En Colab, checkpoints y caches van al disco local del runtime (`/content/TP1_Adell_Giannice_Mazzola/ej1/`) y los WAV a `/content/esc50_data`. Ese disco **se borra al reciclar el runtime**: para conservar los checkpoints hay que comprimir y descargar la carpeta `BASE` antes de cerrar la sesión.
 - Semilla fija (`random`, `numpy`, `torch`), dispositivo agnóstico (cuda/cpu) y fp32 (la consigna no exige precisión mixta en este ejercicio).
 """)
 
@@ -74,12 +78,10 @@ if IN_COLAB:
 SMOKE_TEST = os.environ.get('TP1_SMOKE_TEST') == '1'
 
 if IN_COLAB:
-    from google.colab import drive
-    drive.mount('/content/drive')
-    BASE = '/content/drive/MyDrive/Colab_Notebooks/TP1_Adell_Giannice_Mazzola/ej1'
-    DATA_DIR = '/content/esc50_data'          # WAVs en disco local de Colab
+    BASE = '/content/TP1_Adell_Giannice_Mazzola/ej1'     # disco local de Colab (se pierde al reciclar el runtime)
+    DATA_DIR = '/content/esc50_data'                      # WAVs aparte, para no zipearlos con los checkpoints
 else:
-    BASE = os.environ.get('TP1_LOCAL_DIR', './tp1_local') + '/ej1'
+    BASE = './tp1_local/ej1'
     DATA_DIR = BASE
 if SMOKE_TEST:
     BASE = BASE + '/smoke'                     # no mezclar caches del smoke test con los reales
@@ -95,6 +97,7 @@ import torch, torch.nn as nn, torch.nn.functional as F
 import torchaudio
 import torchaudio.transforms as T
 from sklearn.metrics import accuracy_score, f1_score, confusion_matrix
+from IPython.display import display, Markdown
 
 SEED = 42
 def set_seed(seed=SEED):
@@ -120,20 +123,60 @@ for name, v in [('python', platform.python_version()), ('torch', torch.__version
 # Hiperparámetros de todo el ejercicio
 HPARAMS = dict(
     seed=SEED,
-    sample_rate=22050, clip_seconds=5.0, n_fft=2048, hop_length=512, window='hann',
-    n_mels=128, top_db=80,
-    folds_train=[1, 2, 3], fold_val=4, fold_test=5,
-    specaug_freq_mask=30, specaug_time_mask=40,
-    batch_size=32, max_epochs=1 if SMOKE_TEST else 50, patience=1 if SMOKE_TEST else 10,
+    sample_rate=22050, 
+    clip_seconds=5.0, 
+    n_fft=2048, 
+    hop_length=512, 
+    window='hann',
+    n_mels=128, 
+    top_db=80,
+    folds_train=[1, 2, 3], 
+    fold_val=4, 
+    fold_test=5,
+    specaug_freq_mask=30, 
+    specaug_time_mask=40,
+    batch_size=32, 
+    max_epochs=1 if SMOKE_TEST else 50, patience=1 if SMOKE_TEST else 10,
     optimizer='AdamW',
-    cnn=dict(channels=[32, 64, 128, 256], dropout=0.3, lr=1e-3, weight_decay=1e-2,
-             warmup_epochs=0, cosine=False, specaug=True),
-    A=dict(patch=[128, 18], d_model=64, n_heads=2, n_layers=2, d_ff=128, dropout=0.0,
-           pre_norm=False, lr=5e-4, weight_decay=0.0, warmup_epochs=0, cosine=False, specaug=False),
-    B=dict(patch=[16, 16], d_model=64, n_heads=4, n_layers=2, d_ff=128, dropout=0.1,
-           pre_norm=True, lr=5e-4, weight_decay=0.05, warmup_epochs=1 if SMOKE_TEST else 5,
-           cosine=True, specaug=True),
-    smoke_clips_per_class=2, smoke_classes=[0, 10, 20, 30, 40],
+    cnn=dict(
+        channels=[32, 64, 128, 256], 
+        dropout=0.3, 
+        lr=1e-3, 
+        weight_decay=1e-2,
+        warmup_epochs=0, 
+        cosine=False, 
+        specaug=True
+    ),
+    A=dict(
+        patch=[128, 18], 
+        d_model=64, 
+        n_heads=2, 
+        n_layers=2, 
+        d_ff=128, 
+        dropout=0.0,
+        pre_norm=False, 
+        lr=5e-4, 
+        weight_decay=0.0, 
+        warmup_epochs=0, 
+        cosine=False, 
+        specaug=False
+        ),
+    B=dict(
+        patch=[16, 16], 
+        d_model=64, 
+        n_heads=4, 
+        n_layers=2, 
+        d_ff=128, 
+        dropout=0.1,
+        pre_norm=True, 
+        lr=5e-4, 
+        weight_decay=0.05, 
+        warmup_epochs=1 if SMOKE_TEST else 5,
+        cosine=True, 
+        specaug=True
+    ),
+    smoke_clips_per_class=2, 
+    smoke_classes=[0, 10, 20, 30, 40],
 )
 print(json.dumps(HPARAMS, indent=1))
 """)
@@ -142,9 +185,9 @@ print(json.dumps(HPARAMS, indent=1))
 md(r"""
 ## 2. Datos: ESC-50
 
-**ESC-50** (Piczak, 2015): 2000 clips de 5 s a 44.1 kHz, **50 clases** balanceadas (40 clips por clase) agrupadas en 5 macro-categorías (animales, paisajes naturales y agua, sonidos humanos no verbales, sonidos domésticos, ruidos urbanos). Trae **5 folds predefinidos**, armados de modo que los fragmentos extraídos de una misma grabación original quedan en el mismo fold (evita fuga de información entre splits).
+**ESC-50** (Piczak, 2015): clips de 5 s con clases balanceadas, agrupadas en 5 macro-categorías (animales, paisajes naturales y agua, sonidos humanos no verbales, sonidos domésticos, ruidos urbanos). Trae **folds predefinidos**, armados de modo que los fragmentos extraídos de una misma grabación original quedan en el mismo fold (evita fuga de información entre splits). Las cantidades exactas (clips, clases, clips por clase, tamaño de cada split) se calculan e imprimen más abajo.
 
-**Split** (consigna): folds 1–3 → *train*, fold 4 → *validación* (early stopping y selección del mejor estado), fold 5 → *test* (solo se usa una vez, al final). El dataset es chico, así que se usa completo.
+**Split** (consigna): los primeros folds → *train*, un fold → *validación* (early stopping y selección del mejor estado) y el último → *test* (solo se usa una vez, al final); la asignación concreta está en `HPARAMS`. El dataset es chico, así que se usa completo.
 
 La descarga (~600 MB) y la extracción son **idempotentes**: si el zip o la carpeta ya existen, no se repiten.
 """)
@@ -183,8 +226,20 @@ df = df.reset_index(drop=True)
 
 split_of = lambda f: 'train' if f in HPARAMS['folds_train'] else ('val' if f == HPARAMS['fold_val'] else 'test')
 df['split'] = df.fold.map(split_of)
-display(df.groupby('split').agg(clips=('filename', 'size'), clases=('target', 'nunique'),
-                                folds=('fold', lambda s: sorted(s.unique()))))
+split_tbl = df.groupby('split').agg(clips=('filename', 'size'), clases=('target', 'nunique'),
+                                    folds=('fold', lambda s: sorted(s.unique())))
+display(split_tbl)
+
+per_class = meta.groupby('target').size()
+fold_of = lambda s: ', '.join(str(f) for f in split_tbl.loc[s, 'folds'])
+display(Markdown(
+    f'**Dataset (calculado).** ESC-50 tiene **{len(meta)} clips** de {HPARAMS["clip_seconds"]:.0f} s en **{N_CLASSES} clases** '
+    f'({per_class.min() if per_class.min() == per_class.max() else f"{per_class.min()}–{per_class.max()}"} clips por clase) '
+    f'y **{meta.fold.nunique()} folds**.\n\n'
+    f'**Split usado:** train = folds {fold_of("train")} ({split_tbl.loc["train", "clips"]} clips), '
+    f'validación = fold {fold_of("val")} ({split_tbl.loc["val", "clips"]} clips), '
+    f'test = fold {fold_of("test")} ({split_tbl.loc["test", "clips"]} clips).'
+    + (' *[SMOKE_TEST: subconjunto reducido]*' if SMOKE_TEST else '')))
 """)
 
 # ---------------------------------------------------------------- 3. Representación
@@ -377,14 +432,28 @@ Se adaptan los bloques de las prácticas de la Unidad II (Practica1/Practica4), 
 4. $L$ bloques `EncoderLayer`; la salida del [CLS] alimenta la cabeza lineal de clasificación. Opcionalmente devuelve las matrices de atención de cada capa.
 
 ### 5.3 Configuraciones A y B
-| | Config A | Config B |
-|---|---|---|
-| Tokenización | franjas temporales de banda completa (128 mel × 18 frames) → secuencia corta | parches 2D de 16 × 16 (estilo AST) → secuencia larga |
-| Encoder | 2 capas, d_model 64, 2 cabezas, d_ff 128 | 2 capas, d_model 64, 4 cabezas, d_ff 128 |
-| Normalización | post-norm | pre-norm + LN final |
-| Regularización | ninguna (sin dropout, sin weight decay, sin SpecAugment) | dropout 0.1, weight decay, SpecAugment |
-| Learning rate | constante | warmup lineal + decaimiento coseno |
+Las dos configuraciones comparten la clase `SpectrogramTransformer` y difieren en la **tokenización** (A: franjas temporales de banda completa → secuencia corta; B: parches 2D estilo AST → secuencia larga) y en la **regularización/estabilización** (A: post-norm, sin dropout, sin weight decay, sin SpecAugment y LR constante; B: pre-norm con LN final, dropout, weight decay, SpecAugment y warmup + coseno). La tabla siguiente se arma directamente desde `HPARAMS`.
+""")
 
+code(r"""
+#@title Tabla de configuraciones A y B (generada desde HPARAMS)
+def cfg_row(c):
+    nF, nT = math.ceil(N_MELS / c['patch'][0]), math.ceil(N_FRAMES / c['patch'][1])
+    return {
+        'Tokenización': f'parches {c["patch"][0]} × {c["patch"][1]} (mel × frames) → {nF} × {nT} = {nF * nT} tokens (+ CLS)',
+        'Encoder': f'{c["n_layers"]} capas, d_model {c["d_model"]}, {c["n_heads"]} cabezas, d_ff {c["d_ff"]}',
+        'Normalización': 'pre-norm + LN final' if c['pre_norm'] else 'post-norm',
+        'Dropout / weight decay': f'{c["dropout"]} / {c["weight_decay"]}',
+        'SpecAugment': 'sí' if c['specaug'] else 'no',
+        'Learning rate': f'{c["lr"]:g}, ' + (f'warmup {c["warmup_epochs"]} ép. + coseno' if c['cosine'] else 'constante'),
+    }
+
+ra, rb = cfg_row(HPARAMS['A']), cfg_row(HPARAMS['B'])
+display(Markdown('| | Config A | Config B |\n|---|---|---|\n' +
+                 '\n'.join(f'| {k} | {ra[k]} | {rb[k]} |' for k in ra)))
+""", form=True)
+
+md(r"""
 El **encoder** (capas, `d_model`, `d_ff`) es idéntico en tamaño en ambas configuraciones (la cantidad de cabezas no cambia el número de parámetros); la diferencia total de parámetros proviene solo de la proyección de parches y del positional embedding, que dependen de la tokenización. El conteo exacto se imprime más abajo.
 """)
 
@@ -540,7 +609,7 @@ Loop propio (como en las prácticas de la cátedra), igual para los tres modelos
 - **Schedule de LR**: constante para la CNN y la Config A; **warmup lineal + decaimiento coseno** (por paso) para la Config B.
 - **SpecAugment** en los batches de train de la CNN y la Config B.
 - **Tiempo de pared** medido con `time.time()` (sincronizando la GPU), solo del entrenamiento.
-- Checkpoint en Drive por modelo (mejor estado + historial + tiempo): si ya existe, se carga en lugar de reentrenar (útil si la sesión de Colab se corta). En `SMOKE_TEST` se reentrena siempre.
+- Checkpoint por modelo en `BASE` (mejor estado + historial + tiempo): si ya existe, se carga en lugar de reentrenar (útil si se reinicia el kernel sin perder el runtime). En `SMOKE_TEST` se reentrena siempre.
 
 La accuracy de train se mide sobre los batches tal como se entrenan (con SpecAugment cuando corresponde, y en modo `train`), por eso puede quedar por debajo de la de validación en los modelos regularizados.
 """)
@@ -812,9 +881,39 @@ if SMOKE_TEST:
     print('\n[SMOKE_TEST] Métricas sobre un subset diminuto y 1 época: solo validan que el pipeline corre, no son interpretables.')
 """)
 
-md(r"""
-**Cómo leer estos resultados.** Con solo 1200 clips de entrenamiento, los Transformers entrenados desde cero no tienen el sesgo inductivo de localidad de la CNN y dependen mucho más de la regularización y de la cantidad de datos; por eso los modelos tipo AST alcanzan su mejor desempeño con preentrenamiento (AudioSet/ImageNet), fuera del alcance de este ejercicio. La comparación A vs. B aísla el efecto conjunto de la tokenización (franjas temporales de banda completa vs. parches 2D) y del paquete de regularización/estabilización (pre-norm, warmup, dropout, SpecAugment) con un encoder del mismo tamaño.
-""")
+code(r"""
+#@title Cómo leer estos resultados (texto generado desde las métricas)
+n_train = len(Xtr)
+cnn_acc, tf_acc = C['Accuracy test'], T_['Accuracy test']
+lines = []
+
+if d_cnn > 0:
+    lines.append(f'**CNN vs. Transformers.** Con {n_train} clips de entrenamiento, la CNN 2D ({cnn_acc:.1%}) supera a {best_tf} ({tf_acc:.1%}) '
+                 f'por {100 * d_cnn:.1f} pp. Es consistente con que los Transformers entrenados desde cero no tienen el sesgo inductivo '
+                 f'de localidad de las convoluciones y dependen más de la regularización y de la cantidad de datos.')
+elif d_cnn < 0:
+    lines.append(f'**CNN vs. Transformers.** {best_tf} ({tf_acc:.1%}) supera a la CNN 2D ({cnn_acc:.1%}) por {-100 * d_cnn:.1f} pp aun sin '
+                 f'preentrenamiento: con {n_train} clips, la tokenización en parches y la regularización compensan la falta de sesgo inductivo.')
+else:
+    lines.append(f'**CNN vs. Transformers.** La CNN 2D y {best_tf} empatan en accuracy ({cnn_acc:.1%}).')
+
+if d_acc > 0:
+    lines.append(f'**A vs. B.** B mejora a A en {100 * d_acc:.1f} pp: con un encoder del mismo tamaño, la tokenización en parches 2D '
+                 f'({models["Transformer B"].n_tokens} tokens vs. {models["Transformer A"].n_tokens}) y el paquete de regularización/estabilización '
+                 f'(pre-norm, warmup, dropout, SpecAugment) ayudan. Sin ablación no se puede separar el aporte de cada factor.')
+elif d_acc < 0:
+    lines.append(f'**A vs. B.** A supera a B por {-100 * d_acc:.1f} pp: en este setup la secuencia más larga y la regularización de B no '
+                 f'compensaron (posibles causas: pocos datos y épocas, o regularización excesiva). Sin ablación no se puede separar el aporte de cada factor.')
+else:
+    lines.append('**A vs. B.** A y B empatan en accuracy en test.')
+
+lines.append(f'**Sobreajuste.** Brecha train–validación en la mejor época: A {100 * gap(A):+.1f} pp, B {100 * gap(B):+.1f} pp, CNN {100 * gap(C):+.1f} pp. '
+             f'La accuracy de train de B y de la CNN se mide con SpecAugment, así que su brecha no es directamente comparable con la de A.')
+lines.append('Los modelos tipo AST alcanzan su mejor desempeño con preentrenamiento (AudioSet/ImageNet), fuera del alcance de este ejercicio.')
+if SMOKE_TEST:
+    lines.append('*[SMOKE_TEST] Subconjunto diminuto y 1 época: estas frases solo validan que la celda corre.*')
+display(Markdown('\n\n'.join(lines)))
+""", form=True)
 
 # ---------------------------------------------------------------- 10. Referencias
 md(r"""
@@ -826,7 +925,6 @@ md(r"""
 - Dosovitskiy, A. et al. (2021). *An Image Is Worth 16x16 Words: Transformers for Image Recognition at Scale* (ViT). arXiv:2010.11929.
 - Park, D. S. et al. (2019). *SpecAugment: A Simple Data Augmentation Method for Automatic Speech Recognition*. arXiv:1904.08779.
 - Abnar, S., & Zuidema, W. (2020). *Quantifying Attention Flow in Transformers* (attention rollout). arXiv:2005.00928.
-- Material de la cátedra: Unidad I (Señales: STFT, mel-spectrogram, SpecAugment, CNN 2D), Unidad II (Transformer desde cero), Unidad III (ViT).
 """)
 
 nb = new_notebook(cells=cells, metadata={
