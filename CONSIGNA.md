@@ -12,14 +12,9 @@ Leer la siguiente consigna y ejecutarla utilizando la skill de `proyect_planner`
 ESC-50). 
 
 ### Consignas: 
-1. Cargar el dataset y representar las señales en tiempo y frecuencia (mel-spectrogram); describir los 
-parámetros de ventana y el trade-off tiempo-frecuencia. 
-2. Implementar tres modelos: una CNN 2D sobre el mel-espectrograma y dos configuraciones (A y B, ver 
-NOTAS) de un mismo Transformer encoder DESDE CERO en PyTorch — tokenizar el espectrograma en 
-parches (patching, estilo AST), positional encoding, multi-head attention, FFN y layer normalization. 
-3. Entrenar los tres y comparar en test (accuracy, F1-macro, matriz de confusión), reportando número de 
-parámetros y tiempo de entrenamiento; visualizar los pesos de atención de la Config B sobre la 
-señal/espectrograma. 
+1. Cargar el dataset y representar las señales en tiempo y frecuencia (mel-spectrogram); describir los parámetros de ventana y el trade-off tiempo-frecuencia. 
+2. Implementar tres modelos: una CNN 2D sobre el mel-espectrograma y dos configuraciones (A y B, ver NOTAS) de un mismo Transformer encoder DESDE CERO en PyTorch — tokenizar el espectrograma en parches (patching, estilo AST), positional encoding, multi-head attention, FFN y layer normalization. 
+3. Entrenar los tres y comparar en test (accuracy, F1-macro, matriz de confusión), reportando número de parámetros y tiempo de entrenamiento; visualizar los pesos de atención de la Config B sobre la señal/espectrograma. 
 
 ## Ejercicio 2 — NLP con Transformers (Hugging Face): NER  [LoRA vs. full fine-tuning] 
 **Modelo:** DistilBERT (distilbert-base-cased) 

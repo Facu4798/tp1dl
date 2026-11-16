@@ -54,8 +54,6 @@ md(r"""
 1. Cargar el dataset y representar las señales en **tiempo** y **frecuencia** (mel-spectrogram); describir los parámetros de ventana y el **trade-off tiempo-frecuencia**.
 2. Implementar tres modelos: una **CNN 2D** sobre el mel-espectrograma y dos configuraciones (**A** y **B**) de un mismo **Transformer encoder desde cero** en PyTorch: tokenización del espectrograma en parches (estilo AST), codificación posicional, atención multi-cabeza, FFN y layer normalization.
 3. Entrenar los tres y compararlos en test (accuracy, F1-macro, matriz de confusión), reportando número de parámetros y tiempo de entrenamiento; visualizar los **pesos de atención de la Config B** sobre el espectrograma.
-
-> Todos los números de este notebook (resoluciones, métricas, deltas, conclusiones) se calculan e imprimen desde código; las celdas de texto solo explican la teoría y la metodología.
 """)
 
 # ---------------------------------------------------------------- 1. Setup
@@ -63,7 +61,7 @@ md(r"""
 ## 1. Configuración
 
 - Detectamos si corremos en **Colab**: solo ahí se instalan dependencias; fuera de Colab se usa la carpeta local `./tp1_local/ej1`.
-- `SMOKE_TEST` (por defecto `False`) achica datos y épocas para verificar que el notebook corre de punta a punta en CPU. Se activa con la variable de entorno `TP1_SMOKE_TEST=1`, sin editar el notebook.
+- `SMOKE_TEST` (por defecto `False`) reduce las épocas (1 época, paciencia 1) para verificar que el notebook corre de punta a punta en CPU. Se activa con la variable de entorno `TP1_SMOKE_TEST=1`, sin editar el notebook.
 - En Colab, checkpoints y caches van al disco local del runtime (`/content/TP1_Adell_Giannice_Mazzola/ej1/`) y los WAV a `/content/esc50_data`. Ese disco **se borra al reciclar el runtime**: para conservar los checkpoints hay que comprimir y descargar la carpeta `BASE` antes de cerrar la sesión.
 - Semilla fija (`random`, `numpy`, `torch`), dispositivo agnóstico (cuda/cpu) y fp32 (la consigna no exige precisión mixta en este ejercicio).
 """)
@@ -122,61 +120,57 @@ for name, v in [('python', platform.python_version()), ('torch', torch.__version
 
 # Hiperparámetros de todo el ejercicio
 HPARAMS = dict(
-    seed=SEED,
-    sample_rate=22050, 
-    clip_seconds=5.0, 
-    n_fft=2048, 
-    hop_length=512, 
-    window='hann',
-    n_mels=128, 
-    top_db=80,
-    folds_train=[1, 2, 3], 
-    fold_val=4, 
-    fold_test=5,
-    specaug_freq_mask=30, 
-    specaug_time_mask=40,
+    seed=SEED,  # reproducibilidad de la generación aleatoria
+    sample_rate=44100, # frecuencia de sampling
+    clip_seconds=5.0, # duración de los clips
+    n_fft=2048, # tamaño de ventana fft
+    hop_length=768,  # salto de la ventana de la fft
+    n_mels=128,  # cantidad de bins (bandas) del mel-spectrogram
+    folds_train=[1, 2, 3], # que folds de los 5 van a train
+    fold_val=4,  # el fold 4 se usa para validación
+    fold_test=5, # el fold 5 se usa para testeo
+    specaug_freq_mask=30, # ancho maximo del specaugment
+    specaug_time_mask=40, # duración maxima del specaugment (frames)
     batch_size=32, 
-    max_epochs=1 if SMOKE_TEST else 50, patience=1 if SMOKE_TEST else 10,
+    max_epochs=1 if SMOKE_TEST else 50,  # máximo de épocas
+    patience=1 if SMOKE_TEST else 10,  # early stopping: corta si val no mejora en 10 épocas
     optimizer='AdamW',
     cnn=dict(
         channels=[32, 64, 128, 256], 
         dropout=0.3, 
         lr=1e-3, 
         weight_decay=1e-2,
-        warmup_epochs=0, 
-        cosine=False, 
+        cosine=False,
         specaug=True
     ),
     A=dict(
-        patch=[128, 18], 
-        d_model=64, 
-        n_heads=2, 
-        n_layers=2, 
-        d_ff=128, 
-        dropout=0.0,
-        pre_norm=False, 
-        lr=5e-4, 
+        patch=[128, 18],  # parche (mel × frames): franjas de banda completa -> 16 tokens
+        d_model=64,  # dimensión de los embeddings
+        n_heads=2,  # cabezas de atención
+        n_layers=2,  # bloques del encoder
+        d_ff=128,
+        dropout=0.0,  # sin dropout
+        pre_norm=False,  # post-norm: LayerNorm después del residual
+        lr=1e-3, 
         weight_decay=0.0, 
         warmup_epochs=0, 
         cosine=False, 
         specaug=False
         ),
     B=dict(
-        patch=[16, 16], 
-        d_model=64, 
-        n_heads=4, 
-        n_layers=2, 
-        d_ff=128, 
-        dropout=0.1,
-        pre_norm=True, 
-        lr=5e-4, 
-        weight_decay=0.05, 
-        warmup_epochs=1 if SMOKE_TEST else 5,
+        patch=[16, 16],  # parche (mel × frames) 2D estilo AST -> 8 × 18 = 144 tokens
+        d_model=64,  # dimensión de los embeddings
+        n_heads=4,  # cabezas de atención
+        n_layers=2,  # bloques del encoder
+        d_ff=128,
+        dropout=0.1,  # porcentaje de dropout
+        pre_norm=True,  # pre-norm: LayerNorm antes de cada subcapa
+        lr=1e-3,
+        weight_decay=0.05,
+        warmup_epochs=1 if SMOKE_TEST else 5,  # épocas de subida lineal del lr
         cosine=True, 
         specaug=True
-    ),
-    smoke_clips_per_class=2, 
-    smoke_classes=[0, 10, 20, 30, 40],
+    )
 )
 print(json.dumps(HPARAMS, indent=1))
 """)
@@ -185,11 +179,9 @@ print(json.dumps(HPARAMS, indent=1))
 md(r"""
 ## 2. Datos: ESC-50
 
-**ESC-50** (Piczak, 2015): clips de 5 s con clases balanceadas, agrupadas en 5 macro-categorías (animales, paisajes naturales y agua, sonidos humanos no verbales, sonidos domésticos, ruidos urbanos). Trae **folds predefinidos**, armados de modo que los fragmentos extraídos de una misma grabación original quedan en el mismo fold (evita fuga de información entre splits). Las cantidades exactas (clips, clases, clips por clase, tamaño de cada split) se calculan e imprimen más abajo.
+**ESC-50** (Piczak, 2015): clips de 5 s con clases balanceadas, agrupadas en 5 macro-categorías (animales, paisajes naturales y agua, sonidos humanos no verbales, sonidos domésticos, ruidos urbanos). Trae **folds predefinidos**, armados de modo que los fragmentos extraídos de una misma grabación original quedan en el mismo fold (**evita fuga de información entre splits**).
 
-**Split** (consigna): los primeros folds → *train*, un fold → *validación* (early stopping y selección del mejor estado) y el último → *test* (solo se usa una vez, al final); la asignación concreta está en `HPARAMS`. El dataset es chico, así que se usa completo.
-
-La descarga (~600 MB) y la extracción son **idempotentes**: si el zip o la carpeta ya existen, no se repiten.
+**Split** (consigna): los primeros 3 folds → *train*, un fold → *validación* (early stopping y selección del mejor estado) y el último → *test* (solo se usa una vez, al final)
 """)
 
 code(r"""
@@ -216,13 +208,7 @@ meta.head()
 """)
 
 code(r"""
-# En SMOKE_TEST: pocas clases y pocos clips por fold (el modelo igual tiene 50 salidas)
-df = meta
-if SMOKE_TEST:
-    k = HPARAMS['smoke_clips_per_class']
-    df = (meta[meta.target.isin(HPARAMS['smoke_classes'])]
-          .groupby(['fold', 'target'], group_keys=False).head(k))
-df = df.reset_index(drop=True)
+df = meta.reset_index(drop=True)
 
 split_of = lambda f: 'train' if f in HPARAMS['folds_train'] else ('val' if f == HPARAMS['fold_val'] else 'test')
 df['split'] = df.fold.map(split_of)
@@ -239,7 +225,7 @@ display(Markdown(
     f'**Split usado:** train = folds {fold_of("train")} ({split_tbl.loc["train", "clips"]} clips), '
     f'validación = fold {fold_of("val")} ({split_tbl.loc["val", "clips"]} clips), '
     f'test = fold {fold_of("test")} ({split_tbl.loc["test", "clips"]} clips).'
-    + (' *[SMOKE_TEST: subconjunto reducido]*' if SMOKE_TEST else '')))
+    ))
 """)
 
 # ---------------------------------------------------------------- 3. Representación
@@ -247,7 +233,7 @@ md(r"""
 ## 3. Representación en tiempo y en frecuencia
 
 ### 3.1 Carga y resampleo
-Leemos cada WAV con `soundfile` (lo convertimos a tensor mono) y lo **resampleamos a 22050 Hz** con `torchaudio.transforms.Resample`. Por Nyquist, a 22050 Hz se representan frecuencias hasta 11025 Hz, suficiente para la mayor parte de la energía de los sonidos ambientales, y se reduce a la mitad el costo de cada STFT. Todos los clips se recortan o completan con ceros a exactamente 5 s.
+Leemos cada WAV con `soundfile` (lo convertimos a tensor mono). Por Nyquist, a 44100 Hz se representan frecuencias hasta 22050 Hz, todo el rango audible. Todos los clips se recortan o completan con ceros a exactamente 5 s.
 
 ### 3.2 STFT
 Un sonido ambiental es **no estacionario** (su contenido espectral cambia en el tiempo), así que una FFT global no alcanza: la **STFT** divide la señal en ventanas cortas, multiplica cada una por una **ventana** $w[n]$ y calcula su FFT:
@@ -255,43 +241,38 @@ Un sonido ambiental es **no estacionario** (su contenido espectral cambia en el 
 $$X[m,k] = \sum_{n=0}^{N-1} x[n + mH]\, w[n]\, e^{-j2\pi kn/N}$$
 
 - **`n_fft` ($N$)**: largo de la ventana. Fija la **resolución frecuencial** $\Delta f = f_s / N$ y la **duración** de la ventana $N / f_s$ (cuánto tiempo se "promedia").
-- **`hop_length` ($H$)**: desplazamiento entre ventanas. Fija el paso temporal entre frames $\Delta t = H / f_s$; con $H = N/4$ hay 75 % de solape.
-- **Ventana Hann**: atenúa los bordes de cada segmento y reduce la fuga espectral (*leakage*) respecto de la ventana rectangular; es el default razonable para audio.
-
-El **espectrograma** es $|X[m,k]|^2$ y se muestra en **dB** ($10\log_{10}$), porque la percepción de intensidad es logarítmica y así conviven componentes débiles y fuertes en la misma imagen.
+- **`hop_length` ($H$)**: desplazamiento entre ventanas. Fija el paso temporal entre frames $\Delta t = H / f_s$; el solape entre ventanas es $1 - H/N$ (con $N = 2048$ y $H = 768$, 62.5 %).
 
 ### 3.3 Trade-off tiempo-frecuencia (Gabor)
 No se puede tener resolución arbitrariamente buena en ambos dominios (principio de incertidumbre de Gabor, $\Delta t\,\Delta f \geq \tfrac{1}{4\pi}$): una ventana **larga** separa frecuencias cercanas pero "borronea" los transitorios en el tiempo; una ventana **corta** localiza bien los golpes y ataques pero mezcla frecuencias vecinas. Más abajo se compara la misma señal con dos tamaños de ventana.
 
 ### 3.4 Escala mel
-El oído distingue mucho mejor diferencias de frecuencia en graves que en agudos. La escala mel ($m = 2595\log_{10}(1 + f/700)$) es aproximadamente lineal por debajo de ~500 Hz y logarítmica por encima de ~1 kHz. El **mel-spectrogram** aplica al espectrograma un banco de filtros triangulares espaciados en mel (acá `n_mels = 128`) y luego se pasa a dB. Resultado: una imagen compacta (128 bandas × frames) alineada con la percepción, que es la entrada estándar de los modelos de audio.
+El oído distingue mucho mejor diferencias de frecuencia en graves que en agudos. La escala mel ($m = 2595\log_{10}(1 + f/700)$) es aproximadamente lineal por debajo de ~500 Hz y logarítmica por encima de ~1 kHz. El **mel-spectrogram** aplica al espectrograma un banco de filtros triangulares espaciados en mel (acá `n_mels = 128`) y luego se pasa a dB. Resultado: una imagen compacta (128 bandas × frames) alineada con la percepción.
 """)
 
 code(r"""
 SR = HPARAMS['sample_rate']
 N_SAMPLES = int(SR * HPARAMS['clip_seconds'])
-_resamplers = {}
 
 def load_wav(filename):
-    # soundfile -> tensor mono (1, N) a 22050 Hz y exactamente 5 s
+    # soundfile -> tensor mono (1, N) a SR Hz y exactamente 5 s
     x, sr = sf.read(os.path.join(ESC_DIR, 'audio', filename), dtype='float32', always_2d=True)
+    assert sr == SR, f'{filename}: {sr} Hz != {SR} Hz'
     x = torch.from_numpy(x.mean(axis=1)).unsqueeze(0)
-    if sr != SR:
-        if sr not in _resamplers: _resamplers[sr] = T.Resample(orig_freq=sr, new_freq=SR)
-        x = _resamplers[sr](x)
     return F.pad(x, (0, max(0, N_SAMPLES - x.shape[-1])))[..., :N_SAMPLES]
 
 mel_tf = T.MelSpectrogram(sample_rate=SR, n_fft=HPARAMS['n_fft'], hop_length=HPARAMS['hop_length'],
                           n_mels=HPARAMS['n_mels'], window_fn=torch.hann_window, power=2.0)
-to_db = T.AmplitudeToDB(stype='power', top_db=HPARAMS['top_db'])
+to_db = T.AmplitudeToDB(stype='power', top_db=80)
 
 def plot_time(ax, x, title):
     t = np.arange(x.shape[-1]) / SR
     ax.plot(t, x.squeeze().numpy(), lw=0.5); ax.set_title(title)
     ax.set_xlabel('Tiempo [s]'); ax.set_ylabel('Amplitud')
 
-# Un clip por cada clase de ejemplo (una por macro-categoría)
-demo = df.drop_duplicates('target').set_index('target').loc[HPARAMS['smoke_classes']]
+# Un clip por cada clase de ejemplo (una por macro-categoría): dog, rain, crying_baby, door_wood_knock, helicopter
+DEMO_CLASSES = [0, 10, 20, 30, 40]
+demo = df.drop_duplicates('target').set_index('target').loc[DEMO_CLASSES]
 waves = {row.category: load_wav(row.filename) for row in demo.itertuples()}
 
 fig, axes = plt.subplots(len(waves), 2, figsize=(13, 2.4 * len(waves)))
@@ -331,20 +312,25 @@ print(f'Forma STFT lineal: {tuple(spec_db.shape)} | forma mel: {tuple(mel_db.sha
 """)
 
 md(r"""
-**Demo del trade-off tiempo-frecuencia.** La misma señal (un sonido con transitorios) con una ventana corta y una larga, con hop = n_fft/4 en ambos casos. Con la ventana corta los golpes quedan como líneas verticales finas pero las bandas de frecuencia se ven gruesas; con la larga ocurre lo contrario.
+**Demo del trade-off tiempo-frecuencia.** La misma señal (un sonido con transitorios) con una ventana corta y una larga, con hop = n_fft/4 en ambos casos, en mel (arriba) y en STFT lineal recortada a 0–5 kHz (abajo). Con la ventana corta los golpes quedan como líneas verticales finas, pero la STFT tiene pocos bins (uno cada Δf): en el espectrograma lineal las bandas se ven gruesas y en el mel, en los graves, hay filtros más angostos que Δf que **no contienen ningún bin** y quedan vacíos (franjas horizontales). Con la ventana larga ocurre lo contrario: más detalle en frecuencia, golpes más borrosos.
 """)
 
 code(r"""
-cat_tr = CLASSES[HPARAMS['smoke_classes'][3]]         # sonido de golpes (transitorios)
+cat_tr = CLASSES[DEMO_CLASSES[3]]         # sonido de golpes (transitorios)
 x_tr = waves[cat_tr]
-fig, ax = plt.subplots(1, 2, figsize=(13, 3.8))
-for a, n in zip(ax, [256, 4096]):
+fig, ax = plt.subplots(2, 2, figsize=(13, 7))
+for j, n in enumerate([256, 4096]):
+    mel_n = T.MelSpectrogram(sample_rate=SR, n_fft=n, hop_length=n // 4, n_mels=HPARAMS['n_mels'], power=2.0)
+    m = to_db(mel_n(x_tr))[0]
+    vacios = int((mel_n.mel_scale.fb.sum(0) == 0).sum())          # filtros mel sin ningún bin de la STFT
+    ax[0, j].imshow(m.numpy(), origin='lower', aspect='auto', cmap='magma', extent=[0, 5, 0, HPARAMS['n_mels']])
+    ax[0, j].set_title(f'mel, n_fft={n}: ventana {1000 * n / SR:.1f} ms ({vacios} filtros vacíos)'); ax[0, j].set_ylabel('banda mel')
     s = to_db(T.Spectrogram(n_fft=n, hop_length=n // 4, power=2.0)(x_tr))[0]
-    a.imshow(s.numpy(), origin='lower', aspect='auto', cmap='magma', extent=[0, 5, 0, SR / 2])
-    a.set_title(f'n_fft={n}: ventana {1000 * n / SR:.1f} ms, Δf={SR / n:.1f} Hz')
-    a.set_xlabel('Tiempo [s]'); a.set_ylabel('Frecuencia [Hz]')
+    ax[1, j].imshow(s.numpy(), origin='lower', aspect='auto', cmap='magma', extent=[0, 5, 0, SR / 2])
+    ax[1, j].set_title(f'STFT lineal, n_fft={n}: Δf={SR / n:.1f} Hz'); ax[1, j].set_ylim(0, 5000)
+    ax[1, j].set_xlabel('Tiempo [s]'); ax[1, j].set_ylabel('Frecuencia [Hz]')
     print(f'{cat_tr} | n_fft={n:5d}: ventana={1000 * n / SR:6.1f} ms  Δf={SR / n:6.2f} Hz  '
-          f'Δt(hop)={1000 * (n // 4) / SR:5.1f} ms  forma={tuple(s.shape)}')
+          f'Δt(hop)={1000 * (n // 4) / SR:5.1f} ms  bins={s.shape[0]}  filtros mel vacíos={vacios}/{HPARAMS["n_mels"]}')
 plt.suptitle(f'Trade-off tiempo-frecuencia — {cat_tr}'); plt.tight_layout(); plt.show()
 """)
 
@@ -352,7 +338,7 @@ plt.suptitle(f'Trade-off tiempo-frecuencia — {cat_tr}'); plt.tight_layout(); p
 md(r"""
 ## 4. Precómputo de los mel-spectrogramas, normalización y SpecAugment
 
-La representación es fija, así que se calcula **una sola vez** para todo el dataset y se **cachea en disco** (un tensor `(N, 128, 216)`); el entrenamiento lee directamente el tensor en memoria (en GPU si está disponible), lo que hace cada época muy rápida.
+La representación es fija, así que se calcula **una sola vez** para todo el dataset y se **cachea en disco** (un tensor `(N, 128, 288)`); el entrenamiento lee directamente el tensor en memoria (en GPU si está disponible), lo que hace cada época muy rápida.
 
 **Normalización:** se estandariza con la **media y el desvío del conjunto de train** (un escalar cada uno), aplicados igual a validación y test para no filtrar información de estos splits.
 
@@ -360,7 +346,7 @@ La representación es fija, así que se calcula **una sola vez** para todo el da
 """)
 
 code(r"""
-cache_path = os.path.join(BASE, f'mels_{"smoke" if SMOKE_TEST else "full"}.pt')
+cache_path = os.path.join(BASE, 'mels.pt')
 if os.path.exists(cache_path):
     cache = torch.load(cache_path)
     print('Mel-spectrogramas leídos del cache', cache_path)
@@ -413,22 +399,22 @@ md(r"""
 ## 5. Modelos
 
 ### 5.1 CNN 2D (baseline)
-El mel-spectrogram se trata como una imagen de un canal. Bloques **Conv 3×3 → BatchNorm → ReLU → MaxPool 2×2** con canales crecientes (32, 64, 128, 256): cada bloque duplica los canales y reduce a la mitad tiempo y frecuencia, agrandando el campo receptivo. Al final, **Global Average Pooling** (invariante a la posición exacta del evento), **dropout** y una capa lineal a las 50 clases. Es el baseline fuerte que recomienda la cátedra para audio; se entrena con SpecAugment.
+El mel-spectrogram se trata como una imagen de un canal. Bloques **Conv 3×3 → BatchNorm → ReLU → MaxPool 2×2** con canales crecientes (32, 64, 128, 256): cada bloque duplica los canales y reduce a la mitad tiempo y frecuencia, agrandando el campo receptivo. Al final, **Global Average Pooling** (invariante a la posición exacta del evento), **dropout** y una capa lineal a las 50 clases.
 
 ### 5.2 Transformer encoder desde cero
 Se adaptan los bloques de las prácticas de la Unidad II (Practica1/Practica4), escritos explícitamente — **no** se usa ninguna de las clases `Transformer*` ni `MultiheadAttention` de `torch.nn`:
 
 - `scaled_dot_product_attention`: $\mathrm{softmax}(QK^\top/\sqrt{d_k})\,V$; devuelve la salida **y los pesos** de atención.
 - `MultiHeadAttention`: proyecciones $W_Q, W_K, W_V$, separación en $h$ cabezas $(B, h, L, d_k)$, atención por cabeza, concatenación y proyección de salida $W_O$.
-- `PositionwiseFFN`: Linear → GELU → Linear (GELU como en ViT/AST; en la práctica de la cátedra es ReLU).
+- `PositionwiseFFN`: Linear → ReLU → Linear.
 - `EncoderLayer` con flag `pre_norm`:
-  - **post-norm** (Transformer original, Config A): $x = \mathrm{LN}(x + \mathrm{MHA}(x))$; $x = \mathrm{LN}(x + \mathrm{FFN}(x))$.
-  - **pre-norm** (ViT, Config B): $x = x + \mathrm{MHA}(\mathrm{LN}(x))$; $x = x + \mathrm{FFN}(\mathrm{LN}(x))$, con una LayerNorm final. El camino residual queda "limpio", lo que estabiliza el entrenamiento; combinado con **warmup** del learning rate evita que los primeros pasos (con gradientes grandes y atención casi uniforme) desestabilicen el modelo.
+  - **post-norm** (Transformer original, Config A): en cada subcapa (atención y FFN) se suma la entrada a la salida (conexión residual) y **después** se aplica la LayerNorm.
+  - **pre-norm** (Config B): la LayerNorm se aplica **antes** de cada subcapa, y la suma residual queda sin normalizar; además se agrega una LayerNorm final antes de la cabeza.
 
-`SpectrogramTransformer` (una **única clase** parametrizada, estilo AST/ViT):
+`SpectrogramTransformer` (una **única clase** parametrizada, estilo AST):
 1. **Patching**: el espectrograma $(128 \times T)$ se parte en parches de $p_h \times p_w$ sin solape; si $T$ no es múltiplo de $p_w$ se completa con ceros (= media, tras normalizar) a la derecha.
 2. **Proyección lineal** de cada parche aplanado a `d_model` (equivalente a una convolución con kernel = stride = parche).
-3. Se antepone un **token [CLS]** aprendido y se suma un **positional embedding 1D aprendido** (como ViT/AST); la atención es invariante a permutaciones, así que sin esto se perdería "dónde" está cada parche.
+3. Se antepone un **token [CLS]** aprendido y se suma un **positional embedding 1D aprendido** (como AST); la atención es invariante a permutaciones, así que sin esto se perdería "dónde" está cada parche.
 4. $L$ bloques `EncoderLayer`; la salida del [CLS] alimenta la cabeza lineal de clasificación. Opcionalmente devuelve las matrices de atención de cada capa.
 
 ### 5.3 Configuraciones A y B
@@ -486,15 +472,15 @@ class MultiHeadAttention(nn.Module):
         return self.Wo(out), attn                                          # attn: (B,h,Lq,Lk)
 
 class PositionwiseFFN(nn.Module):
-    # Red feed-forward position-wise: Linear -> GELU -> Linear.
+    # Red feed-forward position-wise: Linear -> ReLU -> Linear.
     def __init__(self, d_model, d_ff, dropout=0.0):
         super().__init__()
-        self.net = nn.Sequential(nn.Linear(d_model, d_ff), nn.GELU(), nn.Dropout(dropout),
+        self.net = nn.Sequential(nn.Linear(d_model, d_ff), nn.ReLU(), nn.Dropout(dropout),
                                  nn.Linear(d_ff, d_model))
     def forward(self, x): return self.net(x)
 
 class EncoderLayer(nn.Module):
-    # Self-attention + FFN con residual + LayerNorm; pre_norm elige el orden (ViT) o el original (post-norm).
+    # Self-attention + FFN con residual + LayerNorm; pre_norm elige el orden (pre-norm) o el original (post-norm).
     def __init__(self, d_model, n_heads, d_ff, dropout=0.0, pre_norm=False):
         super().__init__()
         self.attn = MultiHeadAttention(d_model, n_heads); self.ffn = PositionwiseFFN(d_model, d_ff, dropout)
@@ -611,7 +597,7 @@ Loop propio (como en las prácticas de la cátedra), igual para los tres modelos
 - **Tiempo de pared** medido con `time.time()` (sincronizando la GPU), solo del entrenamiento.
 - Checkpoint por modelo en `BASE` (mejor estado + historial + tiempo): si ya existe, se carga en lugar de reentrenar (útil si se reinicia el kernel sin perder el runtime). En `SMOKE_TEST` se reentrena siempre.
 
-La accuracy de train se mide sobre los batches tal como se entrenan (con SpecAugment cuando corresponde, y en modo `train`), por eso puede quedar por debajo de la de validación en los modelos regularizados.
+
 """)
 
 code(r"""
@@ -641,7 +627,7 @@ def train_model(name):
     steps = math.ceil(len(Xtr) / bs)
     opt = torch.optim.AdamW(model.parameters(), lr=c['lr'], weight_decay=c['weight_decay'])
     sched = torch.optim.lr_scheduler.LambdaLR(
-        opt, lr_lambda_factory(c['warmup_epochs'] * steps, E * steps, c['cosine']))
+        opt, lr_lambda_factory(c.get('warmup_epochs', 0) * steps, E * steps, c['cosine']))
     lossf = nn.CrossEntropyLoss()
     hist = {k: [] for k in ['train_loss', 'train_acc', 'val_loss', 'val_acc', 'lr']}
     best_acc, best_state, bad = -1.0, None, 0
@@ -753,14 +739,18 @@ for name in MODEL_NAMES:
     plt.title(f'Matriz de confusión — {name} (acc test {results.loc[name, "Accuracy test"]:.3f})')
     plt.tight_layout(); plt.show()
 
-# Pares de clases más confundidos por el mejor modelo
-best_name = results['Accuracy test'].idxmax()
-cm = confusion_matrix(y_true, preds[best_name], labels=range(N_CLASSES))
-np.fill_diagonal(cm, 0)
-top = np.dstack(np.unravel_index(np.argsort(cm.ravel())[::-1][:8], cm.shape))[0]
-print(f'Confusiones más frecuentes en test — {best_name}:')
-display(pd.DataFrame([{'Real': CLASSES[i], 'Predicha': CLASSES[j], 'Clips': cm[i, j]} for i, j in top if cm[i, j] > 0],
-                     columns=['Real', 'Predicha', 'Clips']))
+# Pares de clases más confundidos de cada modelo, lado a lado
+N_TOP = 8
+top_tbl = {}
+for name in MODEL_NAMES:
+    cm = confusion_matrix(y_true, preds[name], labels=range(N_CLASSES))
+    np.fill_diagonal(cm, 0)
+    pairs = zip(*np.unravel_index(np.argsort(cm.ravel())[::-1][:N_TOP], cm.shape))
+    rows = [{'Real': CLASSES[i], 'Predicha': CLASSES[j], 'Clips': int(cm[i, j])} for i, j in pairs if cm[i, j] > 0]
+    rows += [{'Real': '', 'Predicha': '', 'Clips': ''}] * (N_TOP - len(rows))
+    top_tbl[name] = pd.DataFrame(rows, index=range(1, N_TOP + 1))
+print('Confusiones más frecuentes en test:')
+display(pd.concat(top_tbl, axis=1))
 """)
 
 # ---------------------------------------------------------------- 8. Atención
@@ -770,63 +760,57 @@ md(r"""
 Para interpretar qué regiones del espectrograma usa la Config B para decidir:
 
 1. Tomamos los pesos de atención de la **última capa** desde el token **[CLS]** hacia los parches (fila 0 de la matriz de atención, sin la columna del propio [CLS]) y los **promediamos sobre las cabezas**.
-2. Como complemento, calculamos el **attention rollout** (Abnar & Zuidema, 2020): en cada capa se promedian las cabezas, se suma la identidad para modelar la conexión residual ($0.5A + 0.5I$), se renormalizan las filas y se multiplican las matrices de todas las capas; la fila del [CLS] estima cuánto fluye la información de cada parche hasta la salida.
-3. El vector resultante (un peso por parche) se lleva a la **grilla de parches** (frecuencia × tiempo), se **sobremuestrea** al tamaño del espectrograma (cada peso cubre su parche de 16 × 16) y se **superpone** al mel-spectrogram.
+2. El vector resultante (un peso por parche) se lleva a la **grilla de parches** (frecuencia × tiempo), se **sobremuestrea** al tamaño del espectrograma (cada peso cubre su parche de 16 × 16) y se **superpone** al mel-spectrogram.
 
-Se muestran ejemplos de test **bien** y **mal** clasificados.
+Se muestran ejemplos de test **bien clasificados**, de clases distintas.
 """)
 
 code(r"""
 @torch.no_grad()
 def cls_attention_maps(model, x):
-    # Devuelve (última capa, rollout) como mapas del tamaño del espectrograma, para un batch x
+    # Devuelve la atención [CLS] -> parches de la última capa como mapa del tamaño del espectrograma
     model.eval()
     _, attns = model(x, return_attn=True)                   # lista de (B,h,L,L)
     last = attns[-1].mean(1)[:, 0, 1:]                      # [CLS] -> parches, promedio de cabezas
-    eye = torch.eye(attns[0].size(-1), device=x.device)
-    R = eye.expand(x.size(0), -1, -1)
-    for a in attns:
-        a = 0.5 * a.mean(1) + 0.5 * eye
-        R = (a / a.sum(-1, keepdim=True)) @ R
-    roll = R[:, 0, 1:]
     nF, nT = model.grid
-    def to_map(v):
-        g = v.reshape(-1, 1, nF, nT)
-        up = F.interpolate(g, scale_factor=(model.ph, model.pw), mode='nearest')
-        return up[:, 0, :x.shape[-2], :x.shape[-1]].cpu().numpy()
-    return to_map(last), to_map(roll)
+    g = last.reshape(-1, 1, nF, nT)
+    up = F.interpolate(g, scale_factor=(model.ph, model.pw), mode='nearest')
+    return up[:, 0, :x.shape[-2], :x.shape[-1]].cpu().numpy()
 
 mB = models['Transformer B']
 pB_test = preds['Transformer B']
-ok_idx, err_idx = np.where(pB_test == y_true)[0], np.where(pB_test != y_true)[0]
-examples = [(i, 'acierto') for i in ok_idx[:2]] + [(i, 'error') for i in err_idx[:2]]
+ok_idx = np.where(pB_test == y_true)[0]
+examples = list(dict(zip(y_true[ok_idx][::-1], ok_idx[::-1])).values())[::-1][:4]   # primer acierto de 4 clases distintas
 
-sel = torch.tensor([i for i, _ in examples])
-last_maps, roll_maps = cls_attention_maps(mB, Xte[sel])
+sel = torch.tensor(examples)
+last_maps = cls_attention_maps(mB, Xte[sel])
 print(f'Grilla de parches de B: {mB.grid[0]} (frecuencia) x {mB.grid[1]} (tiempo) = {mB.n_tokens} tokens')
 
-fig, ax = plt.subplots(len(examples), 3, figsize=(16, 3 * len(examples)))
+fig, ax = plt.subplots(len(examples), 2, figsize=(11, 3 * len(examples)))
 ax = np.atleast_2d(ax)
-for r, (i, kind) in enumerate(examples):
+for r, i in enumerate(examples):
     spec = Xte[i, 0].cpu().numpy()
-    title = f'{kind}: real={CLASSES[y_true[i]]} | pred={CLASSES[pB_test[i]]}'
+    title = f'real = pred = {CLASSES[y_true[i]]}'
     ax[r, 0].imshow(spec, origin='lower', aspect='auto', cmap='magma'); ax[r, 0].set_title(title, fontsize=9)
-    for c, (m, lbl) in enumerate([(last_maps[r], 'atención [CLS] última capa'), (roll_maps[r], 'attention rollout')], 1):
-        ax[r, c].imshow(spec, origin='lower', aspect='auto', cmap='gray')
-        im = ax[r, c].imshow(m, origin='lower', aspect='auto', cmap='jet', alpha=0.45)
-        ax[r, c].set_title(lbl, fontsize=9); fig.colorbar(im, ax=ax[r, c], fraction=0.03)
+    ax[r, 1].imshow(spec, origin='lower', aspect='auto', cmap='gray')
+    im = ax[r, 1].imshow(last_maps[r], origin='lower', aspect='auto', cmap='jet', alpha=0.45)
+    ax[r, 1].set_title('atención [CLS] última capa', fontsize=9); fig.colorbar(im, ax=ax[r, 1], fraction=0.03)
     for a in ax[r]: a.set_xlabel('frame'); a.set_ylabel('banda mel')
 plt.tight_layout(); plt.show()
 """)
 
 code(r"""
 # Atención promedio del [CLS] (última capa) sobre todo el test: ¿qué bandas y qué tramos mira B en general?
-last_all = np.concatenate([cls_attention_maps(mB, Xte[i:i + 64])[0] for i in range(0, len(Xte), 64)])
+last_all = np.concatenate([cls_attention_maps(mB, Xte[i:i + 64]) for i in range(0, len(Xte), 64)])
 mean_map = last_all.mean(0)
-fig, ax = plt.subplots(1, 3, figsize=(16, 3.5), gridspec_kw={'width_ratios': [3, 1, 3]})
+fig, ax = plt.subplots(1, 3, figsize=(16, 3.5), gridspec_kw={'width_ratios': [3, 2, 3]})
 im = ax[0].imshow(mean_map, origin='lower', aspect='auto', cmap='viridis'); fig.colorbar(im, ax=ax[0])
 ax[0].set_title('Atención media [CLS] -> parches (test)'); ax[0].set_xlabel('frame'); ax[0].set_ylabel('banda mel')
-ax[1].plot(mean_map.mean(1), np.arange(N_MELS)); ax[1].set_title('por banda mel'); ax[1].set_ylabel('banda mel')
+ph = mB.ph                                                  # bandas mel por fila de parches
+rows = mean_map.mean(1).reshape(-1, ph).mean(1)             # una barra por fila de parches
+ax[1].bar(np.arange(len(rows)), rows, tick_label=[f'{k * ph}-{(k + 1) * ph - 1}' for k in range(len(rows))])
+ax[1].set_title('por banda mel (fila de parches)'); ax[1].set_xlabel('banda mel'); ax[1].set_ylabel('atención media')
+ax[1].tick_params(axis='x', labelrotation=60, labelsize=7)
 ax[2].plot(mean_map.mean(0)); ax[2].set_title('por frame'); ax[2].set_xlabel('frame')
 plt.tight_layout(); plt.show()
 band = mean_map.mean(1); third = N_MELS // 3
@@ -838,47 +822,43 @@ print(f'Fracción de la atención media en bandas bajas / medias / altas: '
 md(r"""
 ## 9. Conclusiones
 
-Las conclusiones se generan a partir de las métricas obtenidas en este run (no están escritas a mano): ranking en test, efecto de la tokenización y la regularización (A vs. B), eficiencia en parámetros y tiempo, sobreajuste (brecha train–validación en la mejor época) y comparación con la referencia de la cátedra para una CNN 2D simple en ESC-50.
+ranking en test, efecto de la tokenización y la regularización (A vs. B), eficiencia en parámetros y tiempo, sobreajuste (brecha train–validación en la mejor época).
 """)
 
 code(r"""
-REF_CNN_CATEDRA = 0.70                                     # referencia de la cátedra: CNN 2D simple en ESC-50
 r = results
 rank = r.sort_values('Accuracy test', ascending=False)
-print('Ranking por accuracy en test:')
-for k, (name, row) in enumerate(rank.iterrows(), 1):
-    print(f'  {k}. {name:14s} acc={row["Accuracy test"]:.3f}  F1-macro={row["F1-macro test"]:.3f}  '
-          f'params={int(row["Parámetros"]):,}  tiempo={row["Tiempo entrenamiento [s]"]:.1f}s')
-
+gap = lambda x: x['Train acc (mejor época)'] - x['Mejor val acc']
+out = ['**Ranking por accuracy en test**\n',
+       '| Modelo | Accuracy test | F1-macro test | Parámetros | Tiempo [s] |',
+       '|---|---|---|---|---|']
+for name, row in rank.iterrows():
+    out.append(f'| {name} | {row["Accuracy test"]:.3f} | {row["F1-macro test"]:.3f} | '
+               f'{int(row["Parámetros"]):,} | {row["Tiempo entrenamiento [s]"]:.1f} |')
+out.append('')
 A, B, C = r.loc['Transformer A'], r.loc['Transformer B'], r.loc['CNN 2D']
 d_acc, d_f1 = B['Accuracy test'] - A['Accuracy test'], B['F1-macro test'] - A['F1-macro test']
-print(f'\nA vs. B (mismo encoder, distinta tokenización y regularización):')
-print(f'  B {"supera" if d_acc > 0 else ("empata con" if d_acc == 0 else "queda por debajo de")} A por '
-      f'{100 * d_acc:+.1f} pp de accuracy y {100 * d_f1:+.1f} pp de F1-macro.')
-gap = lambda x: x['Train acc (mejor época)'] - x['Mejor val acc']
-print(f'  Brecha train-val en la mejor época: A {100 * gap(A):+.1f} pp vs. B {100 * gap(B):+.1f} pp '
-      f'-> {"la brecha es mayor en A" if gap(A) > gap(B) else "la brecha es mayor o igual en B"} '
-      f'(A no tiene ninguna regularización; B usa dropout, weight decay y SpecAugment).')
-print(f'  Tokens: A={models["Transformer A"].n_tokens}, B={models["Transformer B"].n_tokens} '
-      f'({models["Transformer B"].n_tokens / models["Transformer A"].n_tokens:.1f}x más largos en B); '
-      f'tiempo de entrenamiento B/A = {B["Tiempo entrenamiento [s]"] / A["Tiempo entrenamiento [s]"]:.2f}x.')
+out.append('**A vs. B** (mismo encoder, distinta tokenización y regularización)\n')
+out.append(f'- B {"supera" if d_acc > 0 else ("empata con" if d_acc == 0 else "queda por debajo de")} A por '
+           f'{100 * d_acc:+.1f} pp de accuracy y {100 * d_f1:+.1f} pp de F1-macro.')
+out.append(f'- Brecha train-val en la mejor época: A {100 * gap(A):+.1f} pp vs. B {100 * gap(B):+.1f} pp '
+           f'→ {"la brecha es mayor en A" if gap(A) > gap(B) else "la brecha es mayor o igual en B"} '
+           f'(A no tiene ninguna regularización; B usa dropout, weight decay y SpecAugment).')
+out.append(f'- Tokens: A = {models["Transformer A"].n_tokens}, B = {models["Transformer B"].n_tokens} '
+           f'({models["Transformer B"].n_tokens / models["Transformer A"].n_tokens:.1f}x más largos en B); '
+           f'tiempo de entrenamiento B/A = {B["Tiempo entrenamiento [s]"] / A["Tiempo entrenamiento [s]"]:.2f}x.')
 
 best_tf = 'Transformer B' if B['Accuracy test'] >= A['Accuracy test'] else 'Transformer A'
 T_ = r.loc[best_tf]
-print(f'\nCNN 2D vs. mejor Transformer ({best_tf}):')
 d_cnn = C['Accuracy test'] - T_['Accuracy test']
-print(f'  accuracy {C["Accuracy test"]:.3f} vs. {T_["Accuracy test"]:.3f} -> diferencia CNN − Transformer = {100 * d_cnn:+.1f} pp '
-      f'({"gana la CNN" if d_cnn > 0 else ("empate" if d_cnn == 0 else f"gana {best_tf}")})')
-print(f'  parámetros CNN/{best_tf} = {C["Parámetros"] / T_["Parámetros"]:.2f}x | '
-      f'tiempo CNN/{best_tf} = {C["Tiempo entrenamiento [s]"] / T_["Tiempo entrenamiento [s]"]:.2f}x')
-eff = (r['Accuracy test'] / (r['Parámetros'] / 1e5)).sort_values(ascending=False)
-print(f'  Accuracy por cada 100k parámetros: ' + ', '.join(f'{n} {v:.3f}' for n, v in eff.items()))
-
-print(f'\nReferencia de la cátedra (CNN 2D simple ≈ {REF_CNN_CATEDRA:.0%}): nuestra CNN obtiene {C["Accuracy test"]:.1%} '
-      f'({100 * (C["Accuracy test"] - REF_CNN_CATEDRA):+.1f} pp).')
-print(f'Mejor modelo en test: {rank.index[0]} (acc {rank.iloc[0]["Accuracy test"]:.3f}, F1-macro {rank.iloc[0]["F1-macro test"]:.3f}).')
+out.append(f'\n**CNN 2D vs. mejor Transformer ({best_tf})**\n')
+out.append(f'- Accuracy {C["Accuracy test"]:.3f} vs. {T_["Accuracy test"]:.3f} → diferencia CNN − Transformer = {100 * d_cnn:+.1f} pp '
+           f'({"gana la CNN" if d_cnn > 0 else ("empate" if d_cnn == 0 else f"gana {best_tf}")}).')
+out.append(f'- Parámetros CNN/{best_tf} = {C["Parámetros"] / T_["Parámetros"]:.2f}x; '
+           f'tiempo CNN/{best_tf} = {C["Tiempo entrenamiento [s]"] / T_["Tiempo entrenamiento [s]"]:.2f}x.')
 if SMOKE_TEST:
-    print('\n[SMOKE_TEST] Métricas sobre un subset diminuto y 1 época: solo validan que el pipeline corre, no son interpretables.')
+    out.append('\n*[SMOKE_TEST] Métricas tras 1 época de entrenamiento: solo validan que el pipeline corre, no son interpretables.*')
+display(Markdown('\n'.join(out)))
 """)
 
 code(r"""
@@ -911,7 +891,7 @@ lines.append(f'**Sobreajuste.** Brecha train–validación en la mejor época: A
              f'La accuracy de train de B y de la CNN se mide con SpecAugment, así que su brecha no es directamente comparable con la de A.')
 lines.append('Los modelos tipo AST alcanzan su mejor desempeño con preentrenamiento (AudioSet/ImageNet), fuera del alcance de este ejercicio.')
 if SMOKE_TEST:
-    lines.append('*[SMOKE_TEST] Subconjunto diminuto y 1 época: estas frases solo validan que la celda corre.*')
+    lines.append('*[SMOKE_TEST] Solo 1 época de entrenamiento: estas frases solo validan que la celda corre.*')
 display(Markdown('\n\n'.join(lines)))
 """, form=True)
 
@@ -924,7 +904,6 @@ md(r"""
 - Vaswani, A. et al. (2017). *Attention Is All You Need*. arXiv:1706.03762.
 - Dosovitskiy, A. et al. (2021). *An Image Is Worth 16x16 Words: Transformers for Image Recognition at Scale* (ViT). arXiv:2010.11929.
 - Park, D. S. et al. (2019). *SpecAugment: A Simple Data Augmentation Method for Automatic Speech Recognition*. arXiv:1904.08779.
-- Abnar, S., & Zuidema, W. (2020). *Quantifying Attention Flow in Transformers* (attention rollout). arXiv:2005.00928.
 """)
 
 nb = new_notebook(cells=cells, metadata={
